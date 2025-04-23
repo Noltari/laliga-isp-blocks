@@ -50,11 +50,31 @@ class LaLigaIP:
 class LaLigaGate:
     """LaLigaGate class."""
 
-    def __init__(self, json_data: dict[str, Any]):
+    def __init__(self):
         """LaLigaGate class init."""
         self.ipv4_list: list[IPv4Address] = []
         self.ipv6_list: list[IPv6Address] = []
+        self.last_update: datetime | None = None
 
+    def update_local(self, json_data: dict[str, Any]):
+        """LaLigaGate update from local data."""
+        last_update = json_data.get("last_update")
+        if last_update is not None:
+            self.last_update = datetime.strptime(last_update, "%Y-%m-%d %H:%M:%S")
+
+        ipv4_list = json_data.get("ipv4_list")
+        for ipv4 in ipv4_list:
+            self.ipv4_list.append(IPv4Address(ipv4))
+
+        ipv6_list = json_data.get("ipv6_list")
+        for ipv6 in ipv6_list:
+            self.ipv6_list.append(IPv6Address(ipv6))
+
+        self.ipv4_list.sort()
+        self.ipv6_list.sort()
+
+    def update_sources(self, json_data: dict[str, Any]):
+        """LaLigaGate update from sources."""
         last_update = json_data.get(LAST_UPDATE)
         if last_update is not None:
             self.last_update = datetime.strptime(last_update, "%Y-%m-%d %H:%M:%S")
@@ -80,9 +100,12 @@ class LaLigaGate:
         for cur_ip in ip_list.values():
             cur_ip_addr = cur_ip.addr
             if cur_ip_addr.version == 4:
-                self.ipv4_list.append(cur_ip_addr)
+                if cur_ip_addr not in self.ipv4_list:
+                    self.ipv4_list.append(cur_ip_addr)
             elif cur_ip_addr.version == 6:
-                self.ipv6_list.append(cur_ip_addr)
+                if cur_ip_addr not in self.ipv6_list:
+                    self.ipv6_list.append(cur_ip_addr)
+
         self.ipv4_list.sort()
         self.ipv6_list.sort()
 
@@ -91,13 +114,19 @@ def main() -> None:
     """Screaper entry function."""
     base_dir = os.path.abspath(os.path.dirname(__file__) + os.path.sep + os.path.pardir)
     data_dir = os.path.abspath(base_dir + os.path.sep + "data")
+    json_list_fn = os.path.abspath(data_dir + os.path.sep + "laliga-ip-list.json")
+
+    laliga = LaLigaGate()
+
+    with open(json_list_fn, mode="r") as json_list:
+        json_data = json.load(json_list)
+        laliga.update_local(json_data)
 
     url = "https://hayahora.futbol/estado/data.json"
     response: requests.Response = requests.get(url, timeout=HTTP_TIMEOUT)
     data = response.json()
-    laliga = LaLigaGate(data)
+    laliga.update_sources(data)
 
-    json_list_fn = os.path.abspath(data_dir + os.path.sep + "laliga-ip-list.json")
     with open(json_list_fn, mode="w", encoding="utf-8") as json_list:
         json_data = json.dumps(
             laliga.__dict__,
