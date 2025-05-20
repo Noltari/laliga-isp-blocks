@@ -2,10 +2,13 @@
 
 from datetime import datetime
 import ipaddress
-from ipaddress import IPv4Address, IPv6Address
+from ipaddress import IPv4Address, IPv6Address, IPv4Network, IPv6Network
 import json
 import logging
+import optparse
 import os
+import paramiko
+import re
 from typing import Any, Final
 
 import requests
@@ -22,6 +25,11 @@ HTTP_TIMEOUT: Final[float] = 45.0
 
 OPENWRT_INTERFACE: Final[str] = "cloudflare"
 OPENWRT_METRIC: Final[int] = 256
+OPENWRT_ROUTE4_RE = re.compile(r"^network.@route\[[0-9]+\]")
+OPENWRT_ROUTE6_RE = re.compile(r"^network.@route6\[[0-9]+\]")
+
+OPT_ARGS: list[str]
+OPT_OPTS: optparse.Values
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,7 +38,7 @@ _LOGGER = logging.getLogger(__name__)
 class LaLigaIP:
     """LaLigaIP class."""
 
-    def __init__(self, data: dict[str, Any]):
+    def __init__(self, data: dict[str, Any]) -> None:
         """LaLigaIP class init."""
         ip = data.get(IP, "")
         self.addr = ipaddress.ip_address(ip)
@@ -50,7 +58,7 @@ class LaLigaIP:
 class LaLigaGate:
     """LaLigaGate class."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """LaLigaGate class init."""
         self.ipv4_list: list[IPv4Address] = []
         self.ipv6_list: list[IPv6Address] = []
@@ -62,11 +70,11 @@ class LaLigaGate:
         if last_update is not None:
             self.last_update = datetime.strptime(last_update, "%Y-%m-%d %H:%M:%S")
 
-        ipv4_list = json_data.get("ipv4_list")
+        ipv4_list = json_data.get("ipv4_list", [])
         for ipv4 in ipv4_list:
             self.ipv4_list.append(IPv4Address(ipv4))
 
-        ipv6_list = json_data.get("ipv6_list")
+        ipv6_list = json_data.get("ipv6_list", [])
         for ipv6 in ipv6_list:
             self.ipv6_list.append(IPv6Address(ipv6))
 
@@ -110,8 +118,142 @@ class LaLigaGate:
         self.ipv6_list.sort()
 
 
-def main() -> None:
-    """Screaper entry function."""
+class OpenWrtRoute:
+    """OpenWrt Route class."""
+
+    def __init__(self, ip: type) -> None:
+        """OpenWrt Route class init."""
+        self.interface: str | None = None
+        self.ip: type = ip
+        self.metric: int | None = None
+        self.target: IPv4Network | IPv6Network | None = None
+
+    def get_ip(self) -> IPv4Address | IPv6Address | None:
+        """Get route IP address."""
+        if self.target is not None:
+            return self.target.network_address
+        return None
+
+    def get_target(self) -> str:
+        """Get route target."""
+        return str(self.target)
+
+    def is_ipv4(self) -> bool:
+        """Route is IPv4."""
+        return self.ip == IPv4Network
+
+    def is_ipv6(self) -> bool:
+        """Route is IPv6."""
+        return self.ip == IPv6Network
+
+    def set_uci_value(self, value: str) -> None:
+        """Set UCI value."""
+        value = value.lstrip().rstrip()
+
+        if value.startswith(".interface="):
+            interface = value.removeprefix(".interface=")
+            interface = interface.removeprefix("'").removesuffix("'")
+            self.interface = interface
+        if value.startswith(".metric="):
+            metric = value.removeprefix(".metric=")
+            metric = metric.removeprefix("'").removesuffix("'")
+            self.metric = int(metric)
+        elif value.startswith(".target="):
+            target = value.removeprefix(".target=")
+            target = target.removeprefix("'").removesuffix("'")
+            if self.ip == IPv4Network:
+                self.target = IPv4Network(target)
+            elif self.ip == IPv6Network:
+                self.target = IPv6Network(target)
+
+    def __str__(self) -> str:
+        """Return class string."""
+        data = {
+            "interface": self.interface,
+            "ip": self.ip.__name__,
+            "metric": self.metric,
+            "target": str(self.target),
+        }
+        return str(data)
+
+
+def openwrt(laliga: LaLigaGate) -> None:
+    """OpenWrt function."""
+    line: str
+
+    hostname = OPT_OPTS.openwrt
+    if hostname is None:
+        return
+
+    ssh = paramiko.SSHClient()
+    ssh.load_system_host_keys()
+    ssh.connect(
+        hostname=hostname,
+        username="root",
+    )
+
+    stdin, stdout, stderr = ssh.exec_command("uci show network")
+    routes_v4: list[OpenWrtRoute] = []
+    routes_v6: list[OpenWrtRoute] = []
+    cur_route: OpenWrtRoute
+    for line in stdout:
+        val = None
+
+        if OPENWRT_ROUTE4_RE.match(line):
+            val = OPENWRT_ROUTE4_RE.split(line)[1]
+            if val.startswith("=route"):
+                cur_route = OpenWrtRoute(IPv4Network)
+                routes_v4.append(cur_route)
+                val = None
+        elif OPENWRT_ROUTE6_RE.match(line):
+            val = OPENWRT_ROUTE6_RE.split(line)[1]
+            if val.startswith("=route6"):
+                cur_route = OpenWrtRoute(IPv6Network)
+                routes_v6.append(cur_route)
+                val = None
+
+        if val is not None:
+            cur_route.set_uci_value(val)
+
+    routes: dict[str, OpenWrtRoute] = {}
+    for route in routes_v4:
+        route_ip = str(route.get_ip())
+        routes[route_ip] = route
+    for route in routes_v6:
+        route_ip = str(route.get_ip())
+        routes[route_ip] = route
+
+    route_added = False
+    for ipv4 in laliga.ipv4_list:
+        ipv4_str = str(ipv4)
+        if ipv4_str not in routes:
+            route_added = True
+            ssh.exec_command("uci add network route")
+            ssh.exec_command(
+                f"uci set network.@route[-1].interface='{OPENWRT_INTERFACE}'"
+            )
+            ssh.exec_command(f"uci set network.@route[-1].target='{ipv4_str}/32'")
+            ssh.exec_command(f"uci set network.@route[-1].metric='{OPENWRT_METRIC}'")
+    for ipv6 in laliga.ipv6_list:
+        ipv6_str = str(ipv6)
+        if ipv6_str not in routes:
+            route_added = True
+            ssh.exec_command("uci add network route6")
+            ssh.exec_command(
+                f"uci set network.@route6[-1].interface='{OPENWRT_INTERFACE}'"
+            )
+            ssh.exec_command(f"uci set network.@route6[-1].target='{ipv6_str}/128'")
+            ssh.exec_command(f"uci set network.@route6[-1].metric='{OPENWRT_METRIC}'")
+
+    if route_added:
+        ssh.exec_command("uci commit network")
+        ssh.exec_command("reload_config")
+
+    ssh.close()
+
+
+def scraper() -> LaLigaGate:
+    """Scraper function."""
     base_dir = os.path.abspath(os.path.dirname(__file__) + os.path.sep + os.path.pardir)
     data_dir = os.path.abspath(base_dir + os.path.sep + "data")
     json_list_fn = os.path.abspath(data_dir + os.path.sep + "laliga-ip-list.json")
@@ -160,6 +302,20 @@ def main() -> None:
                 "\n",
             ]
             openwrt_routes.writelines(cur_route)
+
+    return laliga
+
+
+def main() -> None:
+    """Entry function."""
+    global OPT_OPTS, OPT_ARGS
+
+    parser = optparse.OptionParser()
+    parser.add_option("-o", "--openwrt")
+    OPT_OPTS, OPT_ARGS = parser.parse_args()
+
+    laliga = scraper()
+    openwrt(laliga)
 
 
 if __name__ == "__main__":
