@@ -145,7 +145,7 @@ def main() -> None:
             cur_route = [
                 "config route\n",
                 f"\toption interface '{OPENWRT_INTERFACE}'\n",
-                f"\toption target '{cur_ipv4}'\n",
+                f"\toption target '{cur_ipv4}/32'\n",
                 f"\toption metric '{OPENWRT_METRIC}'\n",
                 "\n",
             ]
@@ -155,7 +155,7 @@ def main() -> None:
             cur_route = [
                 "config route6\n",
                 f"\toption interface '{OPENWRT_INTERFACE}'\n",
-                f"\toption target '{cur_ipv6}'\n",
+                f"\toption target '{cur_ipv6}/128'\n",
                 f"option metric '{OPENWRT_METRIC}'\n",
                 "\n",
             ]
