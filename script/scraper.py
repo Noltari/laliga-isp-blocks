@@ -223,11 +223,11 @@ def openwrt(laliga: LaLigaGate) -> None:
         route_ip = str(route.get_ip())
         routes[route_ip] = route
 
-    route_added = False
+    new_routes = False
     for ipv4 in laliga.ipv4_list:
         ipv4_str = str(ipv4)
         if ipv4_str not in routes:
-            route_added = True
+            new_routes += 1
             ssh.exec_command("uci add network route")
             ssh.exec_command(
                 f"uci set network.@route[-1].interface='{OPENWRT_INTERFACE}'"
@@ -237,7 +237,7 @@ def openwrt(laliga: LaLigaGate) -> None:
     for ipv6 in laliga.ipv6_list:
         ipv6_str = str(ipv6)
         if ipv6_str not in routes:
-            route_added = True
+            new_routes += 1
             ssh.exec_command("uci add network route6")
             ssh.exec_command(
                 f"uci set network.@route6[-1].interface='{OPENWRT_INTERFACE}'"
@@ -245,9 +245,10 @@ def openwrt(laliga: LaLigaGate) -> None:
             ssh.exec_command(f"uci set network.@route6[-1].target='{ipv6_str}/128'")
             ssh.exec_command(f"uci set network.@route6[-1].metric='{OPENWRT_METRIC}'")
 
-    if route_added:
+    if new_routes > 0:
         ssh.exec_command("uci commit network")
         ssh.exec_command("reload_config")
+        _LOGGER.warning("OpenWrt: added %s new routes", new_routes)
 
     ssh.close()
 
