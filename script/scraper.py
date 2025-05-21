@@ -228,22 +228,24 @@ def openwrt(laliga: LaLigaGate) -> None:
         ipv4_str = str(ipv4)
         if ipv4_str not in routes:
             new_routes += 1
-            ssh.exec_command("uci add network route")
-            ssh.exec_command(
-                f"uci set network.@route[-1].interface='{OPENWRT_INTERFACE}'"
-            )
-            ssh.exec_command(f"uci set network.@route[-1].target='{ipv4_str}/32'")
-            ssh.exec_command(f"uci set network.@route[-1].metric='{OPENWRT_METRIC}'")
+            uci = "uci batch << EOI\n"
+            uci += "add network route\n"
+            uci += f"set network.@route[-1].interface='{OPENWRT_INTERFACE}'\n"
+            uci += f"set network.@route[-1].target='{ipv4_str}/32'\n"
+            uci += f"set network.@route[-1].metric='{OPENWRT_METRIC}'\n"
+            uci += "EOI"
+            ssh.exec_command(uci)
     for ipv6 in laliga.ipv6_list:
         ipv6_str = str(ipv6)
         if ipv6_str not in routes:
             new_routes += 1
-            ssh.exec_command("uci add network route6")
-            ssh.exec_command(
-                f"uci set network.@route6[-1].interface='{OPENWRT_INTERFACE}'"
-            )
-            ssh.exec_command(f"uci set network.@route6[-1].target='{ipv6_str}/128'")
-            ssh.exec_command(f"uci set network.@route6[-1].metric='{OPENWRT_METRIC}'")
+            uci = "uci batch << EOI\n"
+            uci += "add network route6\n"
+            uci += f"set network.@route6[-1].interface='{OPENWRT_INTERFACE}'\n"
+            uci += f"set network.@route6[-1].target='{ipv6_str}/128'\n"
+            uci += f"set network.@route6[-1].metric='{OPENWRT_METRIC}'\n"
+            uci += "EOI"
+            ssh.exec_command(uci)
 
     if new_routes > 0:
         ssh.exec_command("uci commit network")
