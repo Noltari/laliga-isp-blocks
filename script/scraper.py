@@ -105,14 +105,21 @@ class LaLigaGate:
             else:
                 ip_list[cur_addr].update(cur_data)
 
+        new_ips = 0
         for cur_ip in ip_list.values():
             cur_ip_addr = cur_ip.addr
             if cur_ip_addr.version == 4:
                 if cur_ip_addr not in self.ipv4_list:
+                    new_ips += 1
                     self.ipv4_list.append(cur_ip_addr)
+                    _LOGGER.warning("update_sources: new IPv4 -> %s", cur_ip_addr)
             elif cur_ip_addr.version == 6:
                 if cur_ip_addr not in self.ipv6_list:
+                    new_ips += 1
                     self.ipv6_list.append(cur_ip_addr)
+                    _LOGGER.warning("update_sources: new IPv6 -> %s", cur_ip_addr)
+        if new_ips > 0:
+            _LOGGER.warning("update_sources: added %s new IPs", new_ips)
 
         self.ipv4_list.sort()
         self.ipv6_list.sort()
