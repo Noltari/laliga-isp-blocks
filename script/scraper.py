@@ -19,6 +19,7 @@ IP: Final[str] = "ip"
 ISP: Final[str] = "isp"
 LAST_UPDATE: Final[str] = "lastUpdate"
 STATE: Final[str] = "state"
+STATE_CHANGES: Final[str] = "stateChanges"
 TIMESTAMP: Final[str] = "timestamp"
 
 HTTP_TIMEOUT: Final[float] = 45.0
@@ -43,16 +44,27 @@ class LaLigaIP:
         ip = data.get(IP, "")
         self.addr = ipaddress.ip_address(ip)
 
-        self.isp: list[str] = []
+        self.isp: dict[str, bool] = {}
 
         self.update(data)
 
     def update(self, data: dict[str, Any]) -> None:
         """LaLigaIP class update."""
-        isp = data.get(ISP)
+        isp: str | None = data.get(ISP)
         if isp is not None:
+            isp = isp.lower()
             if isp not in self.isp:
-                self.isp.append(isp)
+                state_changes = data.get(STATE_CHANGES, [])
+                blocked = False
+                ts = None
+                for cur_state in state_changes:
+                    cur_ts_str = cur_state.get(TIMESTAMP, None)
+                    if cur_ts_str is not None:
+                        cur_ts = datetime.fromisoformat(cur_ts_str)
+                        if ts is None or cur_ts > ts:
+                            ts = cur_ts
+                            blocked = cur_state.get(STATE)
+                self.isp[isp] = blocked
 
 
 class LaLigaGate:
@@ -83,6 +95,10 @@ class LaLigaGate:
 
     def update_sources(self, json_data: dict[str, Any]):
         """LaLigaGate update from sources."""
+
+        blocked = OPT_OPTS.blocked
+        isp: str | None = OPT_OPTS.isp
+
         last_update = json_data.get(LAST_UPDATE)
         if last_update is not None:
             self.last_update = datetime.strptime(last_update, "%Y-%m-%d %H:%M:%S")
@@ -120,6 +136,56 @@ class LaLigaGate:
                     _LOGGER.warning("update_sources: new IPv6 -> %s", cur_ip_addr)
         if new_ips > 0:
             _LOGGER.warning("update_sources: added %s new IPs", new_ips)
+
+        rem_ips = 0
+        if blocked:
+            isp_list: dict[str, LaLigaIP] = {}
+            for key, val in ip_list.items():
+                for isp, blocked in val.isp.items():
+                    if blocked:
+                        isp_list[key] = val
+                        continue
+
+            isp_ipv4: list[IPv4Address] = []
+            for cur_ipv4 in self.ipv4_list:
+                if str(cur_ipv4) in isp_list:
+                    isp_ipv4.append(cur_ipv4)
+                else:
+                    rem_ips += 1
+            self.ipv4_list = isp_ipv4
+
+            isp_ipv6: list[IPv6Address] = []
+            for cur_ipv6 in self.ipv6_list:
+                if str(cur_ipv6) in isp_list:
+                    isp_ipv6.append(cur_ipv6)
+                else:
+                    rem_ips += 1
+            self.ipv6_list = isp_ipv6
+        if isp is not None:
+            isp = isp.lower()
+
+            isp_list: dict[str, LaLigaIP] = {}
+            for key, val in ip_list.items():
+                if isp in val.isp:
+                    isp_list[key] = val
+
+            isp_ipv4: list[IPv4Address] = []
+            for cur_ipv4 in self.ipv4_list:
+                if str(cur_ipv4) in isp_list:
+                    isp_ipv4.append(cur_ipv4)
+                else:
+                    rem_ips += 1
+            self.ipv4_list = isp_ipv4
+
+            isp_ipv6: list[IPv6Address] = []
+            for cur_ipv6 in self.ipv6_list:
+                if str(cur_ipv6) in isp_list:
+                    isp_ipv6.append(cur_ipv6)
+                else:
+                    rem_ips += 1
+            self.ipv6_list = isp_ipv6
+        if rem_ips > 0:
+            _LOGGER.warning("update_sources: removed %s IPs", rem_ips)
 
         self.ipv4_list.sort()
         self.ipv6_list.sort()
@@ -321,6 +387,8 @@ def main() -> None:
     global OPT_OPTS, OPT_ARGS
 
     parser = optparse.OptionParser()
+    parser.add_option("--blocked", action="store_true")
+    parser.add_option("--isp")
     parser.add_option("-o", "--openwrt")
     OPT_OPTS, OPT_ARGS = parser.parse_args()
 
