@@ -51,6 +51,21 @@ class LaLigaIP:
 
         self.update(data)
 
+    def is_blocked(self) -> bool:
+        """LaLigaIP check any ISP block."""
+        for blocked in self.isp.values():
+            if blocked:
+                return True
+        return False
+
+    def is_isp_blocked(self, isp: str) -> bool:
+        """LaLigaIP check ISP block."""
+        return self.isp.get(isp, False)
+
+    def is_isp(self, isp: str) -> bool:
+        """LaLigaIP check ISP."""
+        return isp.lower() in self.isp
+
     def update(self, data: dict[str, Any]) -> None:
         """LaLigaIP class update."""
         isp: str | None = data.get(ISP)
@@ -99,8 +114,14 @@ class LaLigaGate:
     def update_sources(self, json_data: dict[str, Any]):
         """LaLigaGate update from sources."""
 
-        blocked = OPT_OPTS.blocked
-        isp: str | None = OPT_OPTS.isp
+        arg_blocked = OPT_OPTS.blocked
+        arg_isp: str | None = OPT_OPTS.isp
+
+        check_blocked = arg_blocked is not None and arg_blocked
+        check_isp = arg_isp is not None
+
+        if check_isp:
+            arg_isp = arg_isp.lower()
 
         last_update = json_data.get(LAST_UPDATE)
         if last_update is not None:
@@ -127,6 +148,18 @@ class LaLigaGate:
         new_ips = 0
         for cur_ip in ip_list.values():
             cur_ip_addr = cur_ip.addr
+
+            add_ip = True
+            if check_blocked and check_isp:
+                add_ip = cur_ip.is_isp_blocked(arg_isp)
+            elif check_blocked:
+                add_ip = cur_ip.is_blocked()
+            elif check_isp:
+                add_ip = cur_ip.is_isp(arg_isp)
+
+            if not add_ip:
+                continue
+
             if cur_ip_addr.version == 4:
                 if cur_ip_addr not in self.ipv4_list:
                     new_ips += 1
@@ -141,7 +174,7 @@ class LaLigaGate:
             _LOGGER.warning("update_sources: added %s new IPs", new_ips)
 
         rem_ips = 0
-        if blocked:
+        if arg_blocked:
             isp_list: dict[str, LaLigaIP] = {}
             for key, val in ip_list.items():
                 for isp, blocked in val.isp.items():
@@ -149,27 +182,25 @@ class LaLigaGate:
                         isp_list[key] = val
                         continue
 
-            isp_ipv4: list[IPv4Address] = []
+            blocked_ipv4: list[IPv4Address] = []
             for cur_ipv4 in self.ipv4_list:
                 if str(cur_ipv4) in isp_list:
-                    isp_ipv4.append(cur_ipv4)
+                    blocked_ipv4.append(cur_ipv4)
                 else:
                     rem_ips += 1
-            self.ipv4_list = isp_ipv4
+            self.ipv4_list = blocked_ipv4
 
-            isp_ipv6: list[IPv6Address] = []
+            blocked_ipv6: list[IPv6Address] = []
             for cur_ipv6 in self.ipv6_list:
                 if str(cur_ipv6) in isp_list:
-                    isp_ipv6.append(cur_ipv6)
+                    blocked_ipv6.append(cur_ipv6)
                 else:
                     rem_ips += 1
-            self.ipv6_list = isp_ipv6
-        if isp is not None:
-            isp = isp.lower()
-
+            self.ipv6_list = blocked_ipv6
+        if arg_isp is not None:
             isp_list: dict[str, LaLigaIP] = {}
             for key, val in ip_list.items():
-                if isp in val.isp:
+                if arg_isp in val.isp:
                     isp_list[key] = val
 
             isp_ipv4: list[IPv4Address] = []
